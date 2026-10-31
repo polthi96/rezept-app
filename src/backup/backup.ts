@@ -1,0 +1,246 @@
+import type { AppDB } from '../db/db'
+import { CURRENT_SCHEMA_VERSION, SETTING_LAST_BACKUP, type ImageRecord, type Recipe, type Setting } from '../db/schema'
+import { arrayBufferToBase64, base64ToArrayBuffer, sha256Hex } from './encoding'
+
+// Versioniertes Backup-Format (siehe docs/KONZEPT.md, 5b).
+//
+// Datei = { format, formatVersion, schemaVersion, appVersion, createdAt, checksum, data }
+// checksum = SHA-256 über JSON.stringify(data) – erkennt beschädigte oder veränderte Dateien.
+
+export const BACKUP_FORMAT = 'rezept-app-backup'
+export const BACKUP_FORMAT_VERSION = 1
+
+/** Alle Tabellen, die gesichert werden. Muss alle Tabellen der Datenbank enthalten. */
+export const BACKUP_TABLES = ['recipes', 'images', 'settings'] as const
+
+type SerializedImage = Omit<ImageRecord, 'data'> & { dataBase64: string }
+
+interface BackupData {
+  recipes: Recipe[]
+  images: SerializedImage[]
+  settings: Setting[]
+}
+
+export interface BackupFile {
+  format: typeof BACKUP_FORMAT
+  formatVersion: number
+  schemaVersion: number
+  appVersion: string
+  createdAt: string
+  checksum: string
+  data: BackupData
+}
+
+export interface RestoreData {
+  recipes: Recipe[]
+  images: ImageRecord[]
+  settings: Setting[]
+}
+
+export interface BackupSummary {
+  createdAt: string
+  appVersion: string
+  schemaVersion: number
+  recipes: number
+  images: number
+}
+
+export interface ValidatedBackup {
+  summary: BackupSummary
+  data: RestoreData
+}
+
+/** Fehler mit einer Meldung, die direkt in der App angezeigt werden kann. */
+export class BackupError extends Error {}
+
+/**
+ * Migrationsschritte für Backups aus älteren Datenbankversionen:
+ * BACKUP_MIGRATIONS[n] hebt die Daten von Version n auf n + 1.
+ * Muss zu den `upgrade`-Funktionen in src/db/schema.ts passen.
+ */
+const BACKUP_MIGRATIONS: Record<number, (data: Record<string, unknown[]>) => Record<string, unknown[]>> = {}
+
+// ---------- Export ----------
+
+export async function createBackup(
+  db: AppDB,
+  appVersion: string,
+  now: Date = new Date(),
+): Promise<{ text: string; filename: string; summary: BackupSummary }> {
+  const { recipes, images, settings } = await db.transaction('r', db.recipes, db.images, db.settings, async () => ({
+    recipes: await db.recipes.toArray(),
+    images: await db.images.toArray(),
+    settings: await db.settings.toArray(),
+  }))
+
+  const data: BackupData = {
+    recipes,
+    images: images.map(({ data, ...rest }) => ({ ...rest, dataBase64: arrayBufferToBase64(data) })),
+    settings,
+  }
+  const file: BackupFile = {
+    format: BACKUP_FORMAT,
+    formatVersion: BACKUP_FORMAT_VERSION,
+    schemaVersion: CURRENT_SCHEMA_VERSION,
+    appVersion,
+    createdAt: now.toISOString(),
+    checksum: await sha256Hex(JSON.stringify(data)),
+    data,
+  }
+  const text = JSON.stringify(file)
+
+  // Selbstprüfung: Die fertige Datei muss sich vollständig wieder einlesen lassen.
+  const check = await parseAndValidateBackup(text)
+  if (check.summary.recipes !== recipes.length || check.summary.images !== images.length) {
+    throw new BackupError('Das Backup konnte nach dem Erstellen nicht korrekt gelesen werden.')
+  }
+
+  const day = now.toISOString().slice(0, 10)
+  return { text, filename: `kochbuch-backup-${day}.json`, summary: check.summary }
+}
+
+// ---------- Prüfung ----------
+
+/** Liest und prüft eine Backup-Datei vollständig. Verändert keine Daten. */
+export async function parseAndValidateBackup(text: string): Promise<ValidatedBackup> {
+  let raw: unknown
+  try {
+    raw = JSON.parse(text)
+  } catch {
+    throw new BackupError('Die Datei ist beschädigt oder kein Kochbuch-Backup (kein gültiges JSON).')
+  }
+  if (!isObject(raw) || raw.format !== BACKUP_FORMAT) {
+    throw new BackupError('Die Datei ist kein Kochbuch-Backup.')
+  }
+  if (typeof raw.formatVersion !== 'number' || raw.formatVersion > BACKUP_FORMAT_VERSION) {
+    throw new BackupError('Das Backup stammt aus einer neueren App-Version. Bitte zuerst die App aktualisieren.')
+  }
+  if (typeof raw.schemaVersion !== 'number' || !Number.isInteger(raw.schemaVersion) || raw.schemaVersion < 1) {
+    throw new BackupError('Das Backup hat keine gültige Datenbankversion.')
+  }
+  if (raw.schemaVersion > CURRENT_SCHEMA_VERSION) {
+    throw new BackupError('Das Backup stammt aus einer neueren App-Version. Bitte zuerst die App aktualisieren.')
+  }
+  if (typeof raw.createdAt !== 'string' || typeof raw.appVersion !== 'string' || typeof raw.checksum !== 'string') {
+    throw new BackupError('Dem Backup fehlen Pflichtangaben.')
+  }
+  if (!isObject(raw.data)) {
+    throw new BackupError('Das Backup enthält keine Daten.')
+  }
+  if ((await sha256Hex(JSON.stringify(raw.data))) !== raw.checksum) {
+    throw new BackupError('Die Prüfsumme stimmt nicht – die Datei ist beschädigt oder wurde verändert.')
+  }
+
+  let data = raw.data as Record<string, unknown>
+  for (const table of BACKUP_TABLES) {
+    if (!Array.isArray(data[table])) throw new BackupError(`Im Backup fehlt der Bereich „${table}".`)
+  }
+  for (let v = raw.schemaVersion; v < CURRENT_SCHEMA_VERSION; v++) {
+    const migrate = BACKUP_MIGRATIONS[v]
+    if (!migrate) throw new BackupError(`Backups der Datenbankversion ${v} werden nicht unterstützt.`)
+    data = migrate(data as Record<string, unknown[]>)
+  }
+
+  const recipes = (data.recipes as unknown[]).map((r, i) => validateRecipe(r, i))
+  const recipeIds = new Set(recipes.map((r) => r.id))
+  const images = (data.images as unknown[]).map((img, i) => validateImage(img, i, recipeIds))
+  const settings = (data.settings as unknown[]).map((s, i) => validateSetting(s, i))
+  assertUnique(recipes.map((r) => r.id), 'Rezept')
+  assertUnique(images.map((r) => r.id), 'Bild')
+  assertUnique(settings.map((r) => r.key), 'Einstellung')
+
+  return {
+    summary: {
+      createdAt: raw.createdAt,
+      appVersion: raw.appVersion,
+      schemaVersion: raw.schemaVersion,
+      recipes: recipes.length,
+      images: images.length,
+    },
+    data: { recipes, images, settings },
+  }
+}
+
+function validateRecipe(r: unknown, i: number): Recipe {
+  const where = `Rezept Nr. ${i + 1}`
+  if (!isObject(r)) throw new BackupError(`${where} ist ungültig.`)
+  requireString(r.id, where, 'ID', true)
+  requireString(r.title, where, 'Titel')
+  requireString(r.createdAt, where, 'Erstelldatum')
+  requireString(r.updatedAt, where, 'Änderungsdatum')
+  if (r.deletedAt !== undefined && r.deletedAt !== null && typeof r.deletedAt !== 'string') {
+    throw new BackupError(`${where}: Papierkorb-Datum ist ungültig.`)
+  }
+  return r as unknown as Recipe
+}
+
+function validateImage(img: unknown, i: number, recipeIds: Set<string>): ImageRecord {
+  const where = `Bild Nr. ${i + 1}`
+  if (!isObject(img)) throw new BackupError(`${where} ist ungültig.`)
+  requireString(img.id, where, 'ID', true)
+  if (typeof img.mime !== 'string' || !img.mime.startsWith('image/')) {
+    throw new BackupError(`${where}: Bildformat ist ungültig.`)
+  }
+  if (img.recipeId !== null && (typeof img.recipeId !== 'string' || !recipeIds.has(img.recipeId))) {
+    throw new BackupError(`${where} gehört zu einem Rezept, das im Backup fehlt.`)
+  }
+  requireString(img.createdAt, where, 'Erstelldatum')
+  for (const dim of ['width', 'height'] as const) {
+    if (img[dim] !== undefined && typeof img[dim] !== 'number') throw new BackupError(`${where}: Bildgröße ist ungültig.`)
+  }
+  if (typeof img.dataBase64 !== 'string') throw new BackupError(`${where}: Bilddaten fehlen.`)
+  let data: ArrayBuffer
+  try {
+    data = base64ToArrayBuffer(img.dataBase64)
+  } catch {
+    throw new BackupError(`${where}: Bilddaten sind beschädigt.`)
+  }
+  if (data.byteLength === 0) throw new BackupError(`${where}: Bilddaten sind leer.`)
+  const { dataBase64: _ignored, ...rest } = img
+  return { ...(rest as Omit<ImageRecord, 'data'>), data }
+}
+
+function validateSetting(s: unknown, i: number): Setting {
+  if (!isObject(s)) throw new BackupError(`Einstellung Nr. ${i + 1} ist ungültig.`)
+  requireString(s.key, `Einstellung Nr. ${i + 1}`, 'Name', true)
+  return { key: s.key as string, value: s.value }
+}
+
+// ---------- Wiederherstellung ----------
+
+/**
+ * Modus „Ersetzen": Alle aktuellen Daten werden durch das Backup ersetzt –
+ * in EINER Transaktion. Schlägt irgendein Schritt fehl, bleibt der alte Stand unverändert.
+ * Nur mit einem Ergebnis von parseAndValidateBackup aufrufen.
+ */
+export async function restoreBackup(db: AppDB, backup: ValidatedBackup): Promise<void> {
+  const { recipes, images, settings } = backup.data
+  await db.transaction('rw', db.recipes, db.images, db.settings, async () => {
+    await Promise.all([db.recipes.clear(), db.images.clear(), db.settings.clear()])
+    await db.recipes.bulkAdd(recipes)
+    await db.images.bulkAdd(images)
+    await db.settings.bulkAdd(settings.filter((s) => s.key !== SETTING_LAST_BACKUP))
+    // Der wiederhergestellte Stand entspricht genau diesem Backup.
+    await db.settings.put({ key: SETTING_LAST_BACKUP, value: backup.summary.createdAt })
+  })
+}
+
+// ---------- Hilfen ----------
+
+function isObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+function requireString(v: unknown, where: string, field: string, nonEmpty = false): void {
+  if (typeof v !== 'string' || (nonEmpty && v.length === 0)) {
+    throw new BackupError(`${where}: ${field} fehlt oder ist ungültig.`)
+  }
+}
+
+function assertUnique(ids: string[], label: string): void {
+  const seen = new Set<string>()
+  for (const id of ids) {
+    if (seen.has(id)) throw new BackupError(`${label} „${id}" kommt im Backup doppelt vor.`)
+    seen.add(id)
+  }
+}

@@ -1,0 +1,12 @@
+node_modules/
+dist/
+dev-dist/
+coverage/
+.DS_Store
+
+# Zugangsdaten und Umgebungsvariablen nie ins Repository
+.env
+.env.*
+
+# Backup-Dateien enthalten persönliche Daten – nie ins Repository
+*backup*.json
