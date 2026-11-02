@@ -25,7 +25,36 @@ Diese Adresse **nie ändern** (Repository nicht umbenennen, nicht verschieben). 
 
 ### Noch fehlender Schritt: Mac mit GitHub verbinden
 
-Auf diesem Mac ist noch **keine GitHub-Anmeldung** eingerichtet (kein GitHub-Programm, keine Zugangsdaten). Die Verbindung mit Claude im Browser reicht dafür nicht. Empfohlener Weg ohne Kommandozeile:
+Auf diesem Mac ist noch **keine GitHub-Anmeldung** eingerichtet. Die Verbindung mit Claude im Browser reicht dafür nicht.
+
+#### Weg A (gewählt): Terminal, ohne zusätzliche Installation
+
+Git ist auf dem Mac schon vorhanden und speichert die Anmeldung im macOS-Schlüsselbund.
+
+1. **Repository anlegen** auf github.com: oben rechts **+ → New repository**
+   - Repository name: `rezept-app` (genau so)
+   - **Public**
+   - Kein Häkchen bei README, .gitignore oder License (das Repository muss leer sein)
+   - **Create repository**
+2. **Pages einschalten:** im neuen Repository **Settings → Pages → Build and deployment → Source: „GitHub Actions"**.
+3. **Zugangsschlüssel (Token) erstellen:** Profilbild → **Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token**
+   - Name: `rezept-app Mac`, Ablauf: z. B. 90 Tage
+   - Repository access: **Only select repositories** → `rezept-app`
+   - Permissions → Repository permissions: **Contents: Read and write** und **Workflows: Read and write**
+   - **Generate token** → Schlüssel kopieren. Er wird nur einmal angezeigt. Nicht in Chats, Dateien oder Notizen einfügen.
+4. **Deinen GitHub-Benutzernamen** an Claude schicken (der ist nicht geheim). Claude trägt dann die Adresse des Repositorys ein.
+5. **Hochladen – selbst im Terminal eingeben:**
+   ```bash
+   git push -u origin main
+   ```
+   - „Username": dein GitHub-Benutzername
+   - „Password": den **Token** einfügen (beim Tippen ist nichts zu sehen, das ist normal) → Enter
+   - Der Schlüsselbund merkt sich den Token, du musst ihn nur einmal eingeben.
+6. Auf github.com unter **Actions** prüfen, ob „Veröffentlichen" grün ist. Ist der Lauf rot, weil Pages noch nicht aktiv war: Lauf öffnen → **Re-run all jobs**.
+
+Läuft der Token ab, einfach einen neuen erstellen. Beim nächsten `git push` fragt das Terminal dann wieder.
+
+#### Weg B: GitHub Desktop (ohne Terminal)
 
 1. **GitHub Desktop** installieren (offizielles Programm von GitHub: <https://desktop.github.com>) und mit deinem GitHub-Konto anmelden.
 2. In GitHub Desktop: **File → Add Local Repository…** → Ordner `Desktop/Rezept-App` wählen.
