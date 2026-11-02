@@ -23,6 +23,10 @@ export function blockUpdates(reason: string): () => void {
   }
 }
 
+export function getUpdateBlockers(): string[] {
+  return snapshot
+}
+
 export function useUpdateBlockers(): string[] {
   return useSyncExternalStore(
     (l) => {

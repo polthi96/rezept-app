@@ -112,7 +112,10 @@ export async function parseAndValidateBackup(text: string): Promise<ValidatedBac
   if (!isObject(raw) || raw.format !== BACKUP_FORMAT) {
     throw new BackupError('Die Datei ist kein Kochbuch-Backup.')
   }
-  if (typeof raw.formatVersion !== 'number' || raw.formatVersion > BACKUP_FORMAT_VERSION) {
+  if (typeof raw.formatVersion !== 'number' || !Number.isInteger(raw.formatVersion) || raw.formatVersion < 1) {
+    throw new BackupError('Das Backup hat keine gültige Formatversion.')
+  }
+  if (raw.formatVersion > BACKUP_FORMAT_VERSION) {
     throw new BackupError('Das Backup stammt aus einer neueren App-Version. Bitte zuerst die App aktualisieren.')
   }
   if (typeof raw.schemaVersion !== 'number' || !Number.isInteger(raw.schemaVersion) || raw.schemaVersion < 1) {
@@ -123,6 +126,9 @@ export async function parseAndValidateBackup(text: string): Promise<ValidatedBac
   }
   if (typeof raw.createdAt !== 'string' || typeof raw.appVersion !== 'string' || typeof raw.checksum !== 'string') {
     throw new BackupError('Dem Backup fehlen Pflichtangaben.')
+  }
+  if (Number.isNaN(Date.parse(raw.createdAt))) {
+    throw new BackupError('Das Erstelldatum des Backups ist ungültig.')
   }
   if (!isObject(raw.data)) {
     throw new BackupError('Das Backup enthält keine Daten.')
@@ -139,6 +145,9 @@ export async function parseAndValidateBackup(text: string): Promise<ValidatedBac
     const migrate = BACKUP_MIGRATIONS[v]
     if (!migrate) throw new BackupError(`Backups der Datenbankversion ${v} werden nicht unterstützt.`)
     data = migrate(data as Record<string, unknown[]>)
+    for (const table of BACKUP_TABLES) {
+      if (!Array.isArray(data[table])) throw new BackupError(`Backup konnte nicht umgewandelt werden („${table}").`)
+    }
   }
 
   const recipes = (data.recipes as unknown[]).map((r, i) => validateRecipe(r, i))
@@ -213,15 +222,17 @@ function validateSetting(s: unknown, i: number): Setting {
  * in EINER Transaktion. Schlägt irgendein Schritt fehl, bleibt der alte Stand unverändert.
  * Nur mit einem Ergebnis von parseAndValidateBackup aufrufen.
  */
-export async function restoreBackup(db: AppDB, backup: ValidatedBackup): Promise<void> {
+export async function restoreBackup(db: AppDB, backup: ValidatedBackup, now: Date = new Date()): Promise<void> {
   const { recipes, images, settings } = backup.data
+  // Ein Datum in der Zukunft würde die Backup-Erinnerung aushebeln – höchstens „jetzt".
+  const backupTime = Math.min(Date.parse(backup.summary.createdAt), now.getTime())
   await db.transaction('rw', db.recipes, db.images, db.settings, async () => {
     await Promise.all([db.recipes.clear(), db.images.clear(), db.settings.clear()])
     await db.recipes.bulkAdd(recipes)
     await db.images.bulkAdd(images)
     await db.settings.bulkAdd(settings.filter((s) => s.key !== SETTING_LAST_BACKUP))
     // Der wiederhergestellte Stand entspricht genau diesem Backup.
-    await db.settings.put({ key: SETTING_LAST_BACKUP, value: backup.summary.createdAt })
+    await db.settings.put({ key: SETTING_LAST_BACKUP, value: new Date(backupTime).toISOString() })
   })
 }
 

@@ -18,6 +18,8 @@ Die Daten liegen auf dem Gerät in IndexedDB (Datenbankname `rezept-app`), verwa
 4. Neue Tabellen werden in `BACKUP_TABLES` aufgenommen (ein Test schlägt sonst fehl).
 5. Jede Migration bekommt einen Test nach dem Muster in `src/db/db.test.ts` („Migrationsweg"): Daten in alter Version anlegen → mit neuer Version öffnen → Daten vollständig und korrekt umgebaut.
 6. Vor dem Veröffentlichen einer Version mit Migration: Backup auf dem iPhone erstellen.
+7. **Neues Feld im Datenmodell ⇒ Prüfung im Backup-Import + Test.** Die `validate…`-Funktionen in `src/backup/backup.ts` prüfen jedes Feld auf Typ und erlaubte Werte; ungeprüfte Felder dürfen nicht in die Datenbank gelangen.
+8. Sobald Datenbankversion 2 existiert: Test, dass `BACKUP_MIGRATIONS` für jede Version von 1 bis zur vorletzten einen Schritt hat.
 
 ## Beispiel: neue Version hinzufügen
 

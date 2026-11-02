@@ -175,6 +175,11 @@ Untere Leiste mit 4 Reitern:
 - Menge darf fehlen oder ein Bruch sein; Einheit ist frei wählbar; Zutaten können als **optional** markiert werden; Hinweise wie „nach Geschmack" bleiben als Text erhalten.
 - Der Portionsrechner (Phase 2) skaliert nur vorhandene Zahlen; „nach Geschmack" bleibt unverändert.
 
+**Phase 1 – Backup-Prüfung und Speichern (aus Phasencheck 0)**
+- Die Backup-Prüfung wird für alle neuen Rezeptfelder (Zutaten, Schritte, Nährwerte …) erweitert, jeweils mit Test.
+- Wird die Datenbank wegen einer neueren App-Version in einem anderen Fenster geschlossen, lehnt das Speichern mit klarer Meldung ab, und die Eingaben bleiben im Formular.
+- Backup mit vielen Bildern auf dem iPhone testen (Speicherverbrauch beim Export).
+
 **Phase 1 – Bilder**
 - Bilder werden **vor dem Speichern verkleinert** (längste Seite ca. 1600 px, komprimiert, Ziel: deutlich unter 1 MB pro Bild).
 - Speicherfehler (z. B. Speicher voll) werden **verständlich angezeigt**; das Rezept wird dann nicht halb gespeichert, und deine Eingaben bleiben im Formular erhalten.

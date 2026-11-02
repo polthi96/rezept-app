@@ -2,13 +2,15 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { db } from '../db/instance'
 import { countData, getLastBackupAt, setSetting } from '../db/db'
 import { SETTING_LAST_BACKUP } from '../db/schema'
-import { BackupError, createBackup, parseAndValidateBackup, restoreBackup, type ValidatedBackup } from '../backup/backup'
+import { createBackup, parseAndValidateBackup, restoreBackup, type ValidatedBackup } from '../backup/backup'
 import { formatBytes, getStorageStatus, type StorageStatus } from '../storage'
 import { useBlockUpdates } from '../update/updateBlockers'
 import { checkForUpdateNow } from '../update/UpdateBanner'
 import { addSelfTestData, removeSelfTestData } from '../selftest'
+import { DB_UNAVAILABLE_TEXT, errorText } from './errors'
 
 type Message = { kind: 'ok' | 'error'; text: string } | null
+type ExportResult = 'saved' | 'cancelled' | 'failed'
 
 export function MoreScreen({ dataVersion, onDataChanged }: { dataVersion: number; onDataChanged: () => void }) {
   return (
@@ -21,6 +23,16 @@ export function MoreScreen({ dataVersion, onDataChanged }: { dataVersion: number
   )
 }
 
+/** Meldung, die VoiceOver vorliest: Erfolg höflich, Fehler sofort. */
+function Notice({ message }: { message: Message }) {
+  if (!message) return null
+  return (
+    <p className={message.kind === 'ok' ? 'msg-ok' : 'msg-error'} role={message.kind === 'ok' ? 'status' : 'alert'}>
+      {message.text}
+    </p>
+  )
+}
+
 // ---------- Datensicherung ----------
 
 function BackupSection({ onDataChanged }: { onDataChanged: () => void }) {
@@ -28,27 +40,37 @@ function BackupSection({ onDataChanged }: { onDataChanged: () => void }) {
   const [busy, setBusy] = useState<string | null>(null)
   const [message, setMessage] = useState<Message>(null)
   const [pending, setPending] = useState<ValidatedBackup | null>(null)
+  const [preBackup, setPreBackup] = useState<Message>(null)
+  const [restoreError, setRestoreError] = useState<Message>(null)
   const [confirmed, setConfirmed] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
 
   useBlockUpdates(busy !== null || pending !== null, 'Datensicherung läuft')
 
-  const refresh = useCallback(() => void getLastBackupAt(db).then(setLastBackup), [])
+  const refresh = useCallback(() => {
+    getLastBackupAt(db)
+      .then(setLastBackup)
+      .catch(() => setMessage({ kind: 'error', text: DB_UNAVAILABLE_TEXT }))
+  }, [])
   useEffect(refresh, [refresh])
 
-  async function exportBackup() {
+  /** Erstellt ein Backup und bietet es zum Speichern an. Meldet, ob es wirklich gespeichert wurde. */
+  async function exportBackup(report: (m: Message) => void): Promise<ExportResult> {
     setBusy('export')
-    setMessage(null)
+    report(null)
     try {
       const { text, filename, summary } = await createBackup(db, __APP_VERSION__)
-      const saved = await saveFile(text, filename)
-      if (saved) {
-        await setSetting(db, SETTING_LAST_BACKUP, summary.createdAt)
-        refresh()
-        setMessage({ kind: 'ok', text: `Backup erstellt und geprüft: ${describe(summary.recipes, summary.images)}.` })
+      if (!(await saveFile(text, filename))) {
+        report({ kind: 'error', text: 'Nicht gesichert – das Speichern wurde abgebrochen.' })
+        return 'cancelled'
       }
+      await setSetting(db, SETTING_LAST_BACKUP, summary.createdAt)
+      refresh()
+      report({ kind: 'ok', text: `Gesichert und geprüft: ${describe(summary.recipes, summary.images)}.` })
+      return 'saved'
     } catch (e) {
-      setMessage({ kind: 'error', text: errorText(e, 'Backup konnte nicht erstellt werden') })
+      report({ kind: 'error', text: `Nicht gesichert: ${errorText(e, 'Backup konnte nicht erstellt werden')}` })
+      return 'failed'
     } finally {
       setBusy(null)
     }
@@ -59,6 +81,8 @@ function BackupSection({ onDataChanged }: { onDataChanged: () => void }) {
     setBusy('check')
     setMessage(null)
     setPending(null)
+    setPreBackup(null)
+    setRestoreError(null)
     setConfirmed(false)
     try {
       setPending(await parseAndValidateBackup(await file.text()))
@@ -73,7 +97,7 @@ function BackupSection({ onDataChanged }: { onDataChanged: () => void }) {
   async function restore() {
     if (!pending) return
     setBusy('restore')
-    setMessage(null)
+    setRestoreError(null)
     try {
       await restoreBackup(db, pending)
       setMessage({ kind: 'ok', text: `Wiederhergestellt: ${describe(pending.summary.recipes, pending.summary.images)}.` })
@@ -81,7 +105,7 @@ function BackupSection({ onDataChanged }: { onDataChanged: () => void }) {
       refresh()
       onDataChanged()
     } catch (e) {
-      setMessage({ kind: 'error', text: `${errorText(e, 'Wiederherstellung fehlgeschlagen')} Dein bisheriger Stand ist unverändert.` })
+      setRestoreError({ kind: 'error', text: `${errorText(e, 'Wiederherstellung fehlgeschlagen')} Dein bisheriger Stand ist unverändert.` })
     } finally {
       setBusy(null)
     }
@@ -99,8 +123,8 @@ function BackupSection({ onDataChanged }: { onDataChanged: () => void }) {
         in „Dateien" → iCloud Drive.
       </p>
       <div className="row">
-        <button className="btn btn-primary" onClick={exportBackup} disabled={busy !== null}>
-          {busy === 'export' ? 'Erstelle …' : 'Backup erstellen'}
+        <button className="btn btn-primary" onClick={() => void exportBackup(setMessage)} disabled={busy !== null}>
+          {busy === 'export' && !pending ? 'Erstelle …' : 'Backup erstellen'}
         </button>
         <button className="btn" onClick={() => fileInput.current?.click()} disabled={busy !== null}>
           {busy === 'check' ? 'Prüfe …' : 'Wiederherstellen …'}
@@ -114,20 +138,25 @@ function BackupSection({ onDataChanged }: { onDataChanged: () => void }) {
         />
       </div>
 
+      {!pending && <Notice message={message} />}
+
       {pending && (
         <div className="restore-box">
-          <h3>Backup geprüft ✓</h3>
+          <h3>
+            Backup geprüft <span aria-hidden="true">✓</span>
+          </h3>
           <p>
-            Erstellt am <strong>{formatDate(pending.summary.createdAt)}</strong> (App-Version {pending.summary.appVersion}
-            ) mit {describe(pending.summary.recipes, pending.summary.images)}.
+            Erstellt am <strong>{formatDate(pending.summary.createdAt)}</strong> (App-Version {pending.summary.appVersion})
+            mit {describe(pending.summary.recipes, pending.summary.images)}.
           </p>
           <p className="warn-text">
             Beim Wiederherstellen werden <strong>alle aktuellen Daten ersetzt</strong>. Alles, was du nach diesem Backup
             angelegt hast, ist danach weg.
           </p>
-          <button className="btn" onClick={exportBackup} disabled={busy !== null}>
-            Vorher aktuellen Stand sichern
+          <button className="btn" onClick={() => void exportBackup(setPreBackup)} disabled={busy !== null}>
+            {busy === 'export' ? 'Sichere …' : 'Vorher aktuellen Stand sichern'}
           </button>
+          <Notice message={preBackup} />
           <label className="check">
             <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
             Ich möchte alle aktuellen Daten durch dieses Backup ersetzen.
@@ -140,10 +169,10 @@ function BackupSection({ onDataChanged }: { onDataChanged: () => void }) {
               Abbrechen
             </button>
           </div>
+          {!confirmed && <p className="hint">„Jetzt ersetzen" ist erst nach dem Häkchen möglich.</p>}
+          <Notice message={restoreError} />
         </div>
       )}
-
-      {message && <p className={message.kind === 'ok' ? 'msg-ok' : 'msg-error'}>{message.text}</p>}
     </section>
   )
 }
@@ -179,11 +208,11 @@ function StorageSection() {
     <section className="card">
       <h2>Speicher</h2>
       <p className="muted">
-        Dauerhafter Speicher:{' '}
-        <strong>{status?.persisted === true ? 'aktiv' : status?.persisted === false ? 'nicht gewährt' : 'unbekannt'}</strong>
+        Schutz vor Aufräumen durch iOS:{' '}
+        <strong>{status?.persisted === true ? 'an' : status?.persisted === false ? 'aus' : 'unbekannt'}</strong>
         {status?.usageBytes != null && <> · belegt: {formatBytes(status.usageBytes)}</>}
       </p>
-      <p className="hint">Schützt nur vor automatischem Aufräumen durch iOS – ersetzt kein Backup.</p>
+      <p className="hint">Schützt nur davor, dass iOS bei Platzmangel aufräumt – ersetzt kein Backup.</p>
     </section>
   )
 }
@@ -196,15 +225,21 @@ function SelfTestSection({ dataVersion, onDataChanged }: { dataVersion: number; 
   const [message, setMessage] = useState<Message>(null)
 
   const refresh = useCallback(async () => {
-    setCounts(await countData(db))
-    const img = await db.images.toCollection().last()
-    setPreview((old) => {
-      if (old) URL.revokeObjectURL(old)
-      return img ? URL.createObjectURL(new Blob([img.data], { type: img.mime })) : null
-    })
+    try {
+      setCounts(await countData(db))
+      const img = await db.images.toCollection().last()
+      setPreview((old) => {
+        if (old) URL.revokeObjectURL(old)
+        return img ? URL.createObjectURL(new Blob([img.data], { type: img.mime })) : null
+      })
+    } catch {
+      setMessage({ kind: 'error', text: DB_UNAVAILABLE_TEXT })
+    }
   }, [])
   // Lädt neu, wann immer sich Daten geändert haben (auch durch eine Wiederherstellung).
   useEffect(() => void refresh(), [refresh, dataVersion])
+  // Bildvorschau beim Verlassen freigeben.
+  useEffect(() => () => setPreview((old) => (old && URL.revokeObjectURL(old), null)), [])
 
   async function run(action: () => Promise<void>) {
     setMessage(null)
@@ -232,7 +267,7 @@ function SelfTestSection({ dataVersion, onDataChanged }: { dataVersion: number; 
           Testdaten entfernen
         </button>
       </div>
-      {message && <p className="msg-error">{message.text}</p>}
+      <Notice message={message} />
     </section>
   )
 }
@@ -240,7 +275,7 @@ function SelfTestSection({ dataVersion, onDataChanged }: { dataVersion: number; 
 // ---------- App ----------
 
 function AppSection() {
-  const [state, setState] = useState<string | null>(null)
+  const [state, setState] = useState<Message>(null)
   return (
     <section className="card">
       <h2>App</h2>
@@ -251,15 +286,23 @@ function AppSection() {
         <button
           className="btn"
           onClick={async () => {
-            setState('Suche …')
-            const ok = await checkForUpdateNow().catch(() => false)
-            setState(ok ? 'Geprüft. Ist eine neue Version da, erscheint oben ein Hinweis.' : 'Update-Suche nur in der installierten App möglich.')
+            setState({ kind: 'ok', text: 'Suche …' })
+            try {
+              const ok = await checkForUpdateNow()
+              setState(
+                ok
+                  ? { kind: 'ok', text: 'Geprüft. Ist eine neue Version da, erscheint oben ein Hinweis.' }
+                  : { kind: 'error', text: 'Update-Suche ist nur in der installierten App möglich.' },
+              )
+            } catch {
+              setState({ kind: 'error', text: 'Update-Suche fehlgeschlagen. Bitte später noch einmal versuchen.' })
+            }
           }}
         >
           Nach Updates suchen
         </button>
       </div>
-      {state && <p className="hint">{state}</p>}
+      <Notice message={state} />
     </section>
   )
 }
@@ -272,12 +315,4 @@ function describe(recipes: number, images: number): string {
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })
-}
-
-function errorText(e: unknown, fallback: string): string {
-  if (e instanceof BackupError) return e.message
-  if (e instanceof DOMException && e.name === 'QuotaExceededError') {
-    return 'Der Speicher auf dem iPhone ist voll. Bitte Platz schaffen und erneut versuchen.'
-  }
-  return `${fallback}.`
 }

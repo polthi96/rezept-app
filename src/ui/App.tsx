@@ -3,6 +3,7 @@ import { db } from '../db/instance'
 import { countData, getLastBackupAt } from '../db/db'
 import { UpdateBanner } from '../update/UpdateBanner'
 import { MoreScreen } from './MoreScreen'
+import { DB_UNAVAILABLE_TEXT, errorName } from './errors'
 
 type Tab = 'today' | 'recipes' | 'plan' | 'more'
 
@@ -18,15 +19,23 @@ const BACKUP_REMINDER_DAYS = 7
 export function App() {
   const [tab, setTab] = useState<Tab>('today')
   const [backupDue, setBackupDue] = useState(false)
+  const [dbError, setDbError] = useState<string | null>(null)
   const [dataVersion, setDataVersion] = useState(0)
   const onDataChanged = useCallback(() => setDataVersion((v) => v + 1), [])
 
   useEffect(() => {
     void (async () => {
-      const [counts, last] = await Promise.all([countData(db), getLastBackupAt(db)])
-      const hasData = counts.recipes + counts.images > 0
-      const old = !last || Date.now() - new Date(last).getTime() > BACKUP_REMINDER_DAYS * 86_400_000
-      setBackupDue(hasData && old)
+      try {
+        const [counts, last] = await Promise.all([countData(db), getLastBackupAt(db)])
+        setDbError(null)
+        const hasData = counts.recipes + counts.images > 0
+        const lastTime = last ? new Date(last).getTime() : NaN
+        // Ungültiges Datum zählt wie „kein Backup" – die Erinnerung darf nie still ausfallen.
+        const old = Number.isNaN(lastTime) || Date.now() - lastTime > BACKUP_REMINDER_DAYS * 86_400_000
+        setBackupDue(hasData && old)
+      } catch (e) {
+        setDbError(errorName(e))
+      }
     })()
   }, [dataVersion, tab])
 
@@ -35,6 +44,12 @@ export function App() {
       <header className="topbar">
         <h1>{TABS.find((t) => t.id === tab)!.label}</h1>
       </header>
+      {dbError && (
+        <div className="banner banner-error" role="alert">
+          <p>{DB_UNAVAILABLE_TEXT}</p>
+          <p className="muted">Fehler: {dbError}</p>
+        </div>
+      )}
       <UpdateBanner />
       {backupDue && tab !== 'more' && (
         <button className="banner banner-warn banner-link" onClick={() => setTab('more')}>
@@ -47,10 +62,15 @@ export function App() {
         {tab === 'plan' && <Placeholder phase="4" text="Hier planst du bald deine Woche und die Einkaufsliste." />}
         {tab === 'more' && <MoreScreen dataVersion={dataVersion} onDataChanged={onDataChanged} />}
       </main>
-      <nav className="tabbar">
+      <nav className="tabbar" aria-label="Hauptmenü">
         {TABS.map((t) => (
-          <button key={t.id} className={t.id === tab ? 'tab active' : 'tab'} onClick={() => setTab(t.id)}>
-            <span className="tab-icon" aria-hidden>
+          <button
+            key={t.id}
+            className={t.id === tab ? 'tab active' : 'tab'}
+            aria-current={t.id === tab ? 'page' : undefined}
+            onClick={() => setTab(t.id)}
+          >
+            <span className="tab-icon" aria-hidden="true">
               {t.icon}
             </span>
             {t.label}

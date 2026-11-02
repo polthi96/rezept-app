@@ -64,6 +64,32 @@ describe('Backup – Export und Wiederherstellung', () => {
     expect(await target.recipes.count()).toBe(2)
   })
 
+  it('Umlaute, Sonderzeichen und Emojis überstehen Export und Wiederherstellung', async () => {
+    const source = freshDb()
+    const title = 'Käsespätzle „Omas Art" – ½ Zwiebel & Grüße 🧀'
+    await source.recipes.add({ ...testRecipe, title })
+    const { text } = await createBackup(source, '0.1.0', NOW)
+    const target = freshDb()
+    await restoreBackup(target, await parseAndValidateBackup(text))
+    expect((await target.recipes.get(testRecipe.id))?.title).toBe(title)
+  })
+
+  it('„Letztes Backup" aus der Datei wird ignoriert, Erstelldatum des Backups gilt', async () => {
+    const source = freshDb()
+    await source.settings.put({ key: 'lastBackupAt', value: '2020-01-01T00:00:00.000Z' })
+    const { text } = await createBackup(source, '0.1.0', NOW)
+    const target = freshDb()
+    await restoreBackup(target, await parseAndValidateBackup(text), NOW)
+    expect(await getLastBackupAt(target)).toBe(NOW.toISOString())
+  })
+
+  it('Erstelldatum in der Zukunft wird beim Wiederherstellen auf „jetzt" begrenzt', async () => {
+    const { text } = await createBackup(freshDb(), '0.1.0', new Date('2030-01-01T00:00:00.000Z'))
+    const target = freshDb()
+    await restoreBackup(target, await parseAndValidateBackup(text), NOW)
+    expect(await getLastBackupAt(target)).toBe(NOW.toISOString())
+  })
+
   it('Leere Datenbank lässt sich sichern und wiederherstellen', async () => {
     const { text } = await createBackup(freshDb(), '0.1.0', NOW)
     const target = await dbWithOtherData()
@@ -139,6 +165,31 @@ describe('Backup – fehlerhafte Dateien verändern keine Daten', () => {
 
   it('doppelte IDs', async () => {
     const text = await tamper(await validBackupText(), (f) => (f.data.recipes[1].id = f.data.recipes[0].id))
+    await expectRejectedAndUnchanged(text, /doppelt/)
+  })
+
+  it('ungültiges Erstelldatum', async () => {
+    const text = await tamper(await validBackupText(), (f) => (f.createdAt = 'gestern'))
+    await expectRejectedAndUnchanged(text, /Erstelldatum des Backups ist ungültig/)
+  })
+
+  it('ungültige Formatversion', async () => {
+    const text = await tamper(await validBackupText(), (f) => (f.formatVersion = 0))
+    await expectRejectedAndUnchanged(text, /keine gültige Formatversion/)
+  })
+
+  it('leere Bilddaten', async () => {
+    const text = await tamper(await validBackupText(), (f) => (f.data.images[0].dataBase64 = ''))
+    await expectRejectedAndUnchanged(text, /Bilddaten sind leer/)
+  })
+
+  it('ungültige Bildgröße', async () => {
+    const text = await tamper(await validBackupText(), (f) => (f.data.images[0].width = 'breit'))
+    await expectRejectedAndUnchanged(text, /Bildgröße ist ungültig/)
+  })
+
+  it('doppelte Einstellungen', async () => {
+    const text = await tamper(await validBackupText(), (f) => f.data.settings.push({ ...f.data.settings[0] }))
     await expectRejectedAndUnchanged(text, /doppelt/)
   })
 
