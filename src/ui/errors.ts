@@ -1,4 +1,5 @@
 import { BackupError } from '../backup/backup'
+import { ImageReadError } from '../recipes/images'
 
 // Übersetzt technische Fehler in Meldungen für die Oberfläche.
 
@@ -9,8 +10,11 @@ export function isQuotaError(e: unknown): boolean {
 }
 
 export function errorText(e: unknown, fallback: string): string {
-  if (e instanceof BackupError) return e.message
+  if (e instanceof BackupError || e instanceof ImageReadError) return e.message
   if (isQuotaError(e)) return 'Der Speicher auf dem iPhone ist voll. Bitte Platz schaffen und erneut versuchen.'
+  if (errorName(e) === 'DatabaseClosedError') {
+    return 'Speichern nicht möglich: Eine neuere Version der App wurde geöffnet. Deine Eingaben stehen noch hier – kopiere wichtige Texte, bevor du die App neu lädst.'
+  }
   return `${fallback}.`
 }
 

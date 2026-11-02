@@ -1,6 +1,11 @@
 import type { AppDB } from '../db/db'
 import { CURRENT_SCHEMA_VERSION, SETTING_LAST_BACKUP, type ImageRecord, type Recipe, type Setting } from '../db/schema'
-import { arrayBufferToBase64, base64ToArrayBuffer, sha256Hex } from './encoding'
+import { imageV1toV2, recipeV1toV2 } from '../db/migrations'
+import { arrayBufferToBase64, sha256Hex } from './encoding'
+import { BackupError } from './errors'
+import { validateImage, validateRecipe, validateSetting } from './validate'
+
+export { BackupError }
 
 // Versioniertes Backup-Format (siehe docs/KONZEPT.md, 5b).
 //
@@ -50,15 +55,18 @@ export interface ValidatedBackup {
   data: RestoreData
 }
 
-/** Fehler mit einer Meldung, die direkt in der App angezeigt werden kann. */
-export class BackupError extends Error {}
-
 /**
  * Migrationsschritte für Backups aus älteren Datenbankversionen:
  * BACKUP_MIGRATIONS[n] hebt die Daten von Version n auf n + 1.
  * Muss zu den `upgrade`-Funktionen in src/db/schema.ts passen.
  */
-const BACKUP_MIGRATIONS: Record<number, (data: Record<string, unknown[]>) => Record<string, unknown[]>> = {}
+export const BACKUP_MIGRATIONS: Record<number, (data: Record<string, unknown[]>) => Record<string, unknown[]>> = {
+  1: (data) => ({
+    ...data,
+    recipes: data.recipes.map((r) => recipeV1toV2(r as Record<string, unknown>)),
+    images: data.images.map((img) => imageV1toV2(img as Record<string, unknown>)),
+  }),
+}
 
 // ---------- Export ----------
 
@@ -170,51 +178,6 @@ export async function parseAndValidateBackup(text: string): Promise<ValidatedBac
   }
 }
 
-function validateRecipe(r: unknown, i: number): Recipe {
-  const where = `Rezept Nr. ${i + 1}`
-  if (!isObject(r)) throw new BackupError(`${where} ist ungültig.`)
-  requireString(r.id, where, 'ID', true)
-  requireString(r.title, where, 'Titel')
-  requireString(r.createdAt, where, 'Erstelldatum')
-  requireString(r.updatedAt, where, 'Änderungsdatum')
-  if (r.deletedAt !== undefined && r.deletedAt !== null && typeof r.deletedAt !== 'string') {
-    throw new BackupError(`${where}: Papierkorb-Datum ist ungültig.`)
-  }
-  return r as unknown as Recipe
-}
-
-function validateImage(img: unknown, i: number, recipeIds: Set<string>): ImageRecord {
-  const where = `Bild Nr. ${i + 1}`
-  if (!isObject(img)) throw new BackupError(`${where} ist ungültig.`)
-  requireString(img.id, where, 'ID', true)
-  if (typeof img.mime !== 'string' || !img.mime.startsWith('image/')) {
-    throw new BackupError(`${where}: Bildformat ist ungültig.`)
-  }
-  if (img.recipeId !== null && (typeof img.recipeId !== 'string' || !recipeIds.has(img.recipeId))) {
-    throw new BackupError(`${where} gehört zu einem Rezept, das im Backup fehlt.`)
-  }
-  requireString(img.createdAt, where, 'Erstelldatum')
-  for (const dim of ['width', 'height'] as const) {
-    if (img[dim] !== undefined && typeof img[dim] !== 'number') throw new BackupError(`${where}: Bildgröße ist ungültig.`)
-  }
-  if (typeof img.dataBase64 !== 'string') throw new BackupError(`${where}: Bilddaten fehlen.`)
-  let data: ArrayBuffer
-  try {
-    data = base64ToArrayBuffer(img.dataBase64)
-  } catch {
-    throw new BackupError(`${where}: Bilddaten sind beschädigt.`)
-  }
-  if (data.byteLength === 0) throw new BackupError(`${where}: Bilddaten sind leer.`)
-  const { dataBase64: _ignored, ...rest } = img
-  return { ...(rest as Omit<ImageRecord, 'data'>), data }
-}
-
-function validateSetting(s: unknown, i: number): Setting {
-  if (!isObject(s)) throw new BackupError(`Einstellung Nr. ${i + 1} ist ungültig.`)
-  requireString(s.key, `Einstellung Nr. ${i + 1}`, 'Name', true)
-  return { key: s.key as string, value: s.value }
-}
-
 // ---------- Wiederherstellung ----------
 
 /**
@@ -240,12 +203,6 @@ export async function restoreBackup(db: AppDB, backup: ValidatedBackup, now: Dat
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
-}
-
-function requireString(v: unknown, where: string, field: string, nonEmpty = false): void {
-  if (typeof v !== 'string' || (nonEmpty && v.length === 0)) {
-    throw new BackupError(`${where}: ${field} fehlt oder ist ungültig.`)
-  }
 }
 
 function assertUnique(ids: string[], label: string): void {

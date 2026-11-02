@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { removeSelfTestData } from './selftest'
-import { freshDb, seed, testImage, testRecipe } from './test/fixtures'
+import { freshDb, makeRecipe, seed, testImage, testRecipe } from './test/fixtures'
 
 describe('Selbsttest-Daten', () => {
   it('„Testdaten entfernen" löscht nur Testdaten, keine echten Daten', async () => {
     const db = freshDb()
     await seed(db)
-    await db.recipes.add({ id: 'selbsttest-1', title: 'Testrezept', createdAt: 'x', updatedAt: 'x' })
+    await db.recipes.add(makeRecipe({ id: 'selbsttest-1', title: 'Testrezept' }))
     await db.images.add({ ...testImage(), id: 'selbsttest-2', recipeId: 'selbsttest-1' })
 
     await removeSelfTestData(db)

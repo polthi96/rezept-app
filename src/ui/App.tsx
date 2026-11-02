@@ -3,6 +3,8 @@ import { db } from '../db/instance'
 import { countData, getLastBackupAt } from '../db/db'
 import { UpdateBanner } from '../update/UpdateBanner'
 import { MoreScreen } from './MoreScreen'
+import { RecipesTab } from './recipes/RecipesTab'
+import { purgeExpiredTrash } from '../recipes/repo'
 import { DB_UNAVAILABLE_TEXT, errorName } from './errors'
 
 type Tab = 'today' | 'recipes' | 'plan' | 'more'
@@ -22,6 +24,11 @@ export function App() {
   const [dbError, setDbError] = useState<string | null>(null)
   const [dataVersion, setDataVersion] = useState(0)
   const onDataChanged = useCallback(() => setDataVersion((v) => v + 1), [])
+
+  // Rezepte, die länger als 30 Tage im Papierkorb liegen, beim Start endgültig entfernen.
+  useEffect(() => {
+    purgeExpiredTrash(db).catch(() => undefined)
+  }, [])
 
   useEffect(() => {
     void (async () => {
@@ -58,7 +65,10 @@ export function App() {
       )}
       <main className="content">
         {tab === 'today' && <Placeholder phase="5" text="Hier siehst du bald deine Tagesübersicht mit Kalorien und Makros." />}
-        {tab === 'recipes' && <Placeholder phase="1" text="Hier sammelst du bald deine Rezepte." />}
+        {/* Rezepte bleiben eingehängt, damit ein halb ausgefülltes Formular beim Reiterwechsel erhalten bleibt. */}
+        <div hidden={tab !== 'recipes'}>
+          <RecipesTab />
+        </div>
         {tab === 'plan' && <Placeholder phase="4" text="Hier planst du bald deine Woche und die Einkaufsliste." />}
         {tab === 'more' && <MoreScreen dataVersion={dataVersion} onDataChanged={onDataChanged} />}
       </main>

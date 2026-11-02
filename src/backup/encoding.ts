@@ -1,9 +1,17 @@
 // Hilfsfunktionen: Bilddaten <-> Base64-Text, Prüfsumme.
 
+// Neuere Browser (u. a. Safari ab iOS 18.2) haben eine schnelle eingebaute Umwandlung.
+type NativeBase64 = {
+  toBase64?: (this: Uint8Array) => string
+}
+type NativeBase64Ctor = { fromBase64?: (s: string) => Uint8Array }
+
 const CHUNK = 0x8000
 
 export function arrayBufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer)
+  const native = (Uint8Array.prototype as NativeBase64).toBase64
+  if (native) return native.call(bytes)
   let binary = ''
   for (let i = 0; i < bytes.length; i += CHUNK) {
     binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK))
@@ -11,11 +19,13 @@ export function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return btoa(binary)
 }
 
-const BASE64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/
+const BASE64_CHARS = /^[A-Za-z0-9+/]*={0,2}$/
 
 /** Wirft einen Fehler, wenn der Text kein gültiges Base64 ist. */
 export function base64ToArrayBuffer(base64: string): ArrayBuffer {
-  if (!BASE64_RE.test(base64)) throw new Error('ungültige Base64-Daten')
+  if (base64.length % 4 !== 0 || !BASE64_CHARS.test(base64)) throw new Error('ungültige Base64-Daten')
+  const native = (Uint8Array as unknown as NativeBase64Ctor).fromBase64
+  if (native) return native(base64).slice().buffer
   const binary = atob(base64)
   const bytes = new Uint8Array(binary.length)
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)

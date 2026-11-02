@@ -10,8 +10,25 @@ export async function addSelfTestData(db: AppDB): Promise<void> {
   const recipeId = `${PREFIX}${crypto.randomUUID()}`
   const image = await drawTestImage()
   await db.transaction('rw', db.recipes, db.images, async () => {
-    await db.recipes.add({ id: recipeId, title: `Testrezept ${new Date().toLocaleTimeString('de-DE')}`, createdAt: now, updatedAt: now, deletedAt: null })
-    await db.images.add({ id: `${PREFIX}${crypto.randomUUID()}`, recipeId, mime: 'image/png', data: image.data, width: image.width, height: image.height, createdAt: now })
+    await db.recipes.add({
+      id: recipeId,
+      title: `Testrezept ${new Date().toLocaleTimeString('de-DE')}`,
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: null,
+      sourceUrl: null,
+      servings: 2,
+      activeMinutes: 10,
+      totalMinutes: 20,
+      tags: ['Test'],
+      favorite: 0,
+      ingredients: [
+        { id: crypto.randomUUID(), name: 'Testzutat', amount: 0.5, amountMax: null, unit: 'Dose', note: '', optional: false },
+        { id: crypto.randomUUID(), name: 'Salz', amount: null, amountMax: null, unit: '', note: 'nach Geschmack', optional: true },
+      ],
+      steps: [{ id: crypto.randomUUID(), text: 'Testschritt', timerSeconds: 60 }],
+    })
+    await db.images.add({ id: `${PREFIX}${crypto.randomUUID()}`, recipeId, position: 0, mime: 'image/png', data: image.data, width: image.width, height: image.height, createdAt: now })
   })
 }
 

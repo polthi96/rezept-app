@@ -1,6 +1,6 @@
 # Konzept: Rezept- & Ernährungs-App (Arbeitstitel „Kochbuch")
 
-Stand: 31.10.2026 · Status: **freigegeben, Phase 0 in Umsetzung**
+Stand: 02.11.2026 · Status: **freigegeben – Phase 0 abgeschlossen, Phase 1 umgesetzt (Test auf dem iPhone ausstehend)**
 
 ## 1. Kontext & Ziel
 

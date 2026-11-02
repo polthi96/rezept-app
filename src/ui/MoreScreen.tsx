@@ -8,6 +8,7 @@ import { useBlockUpdates } from '../update/updateBlockers'
 import { checkForUpdateNow } from '../update/UpdateBanner'
 import { addSelfTestData, removeSelfTestData } from '../selftest'
 import { DB_UNAVAILABLE_TEXT, errorText } from './errors'
+import { TrashSection } from './TrashSection'
 
 type Message = { kind: 'ok' | 'error'; text: string } | null
 type ExportResult = 'saved' | 'cancelled' | 'failed'
@@ -16,6 +17,7 @@ export function MoreScreen({ dataVersion, onDataChanged }: { dataVersion: number
   return (
     <div className="stack">
       <BackupSection onDataChanged={onDataChanged} />
+      <TrashSection />
       <StorageSection />
       <SelfTestSection dataVersion={dataVersion} onDataChanged={onDataChanged} />
       <AppSection />

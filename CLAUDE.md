@@ -15,6 +15,8 @@ Konzept und Phasenplan: `docs/KONZEPT.md` (verbindlich, inkl. Abschnitt 7a „An
 ## Befehle
 - `npm run dev` · `npm test` · `npm run build` · `npm run preview` (Port 4173)
 - Offline/Update nur in `build` + `preview` testbar. Der eingebaute Browser der Desktop-App registriert keine Service Worker.
+- Browser-Tests mit Bildern/Timern: Browser-Pane sichtbar machen (versteckt werden Timer und Bild-Laden stark gebremst). In Testskripten mit MessageChannel statt setTimeout warten.
+- Formulare mit `noValidate` – eigene, verständliche Prüfung statt stummer Browser-Prüfung.
 
 ## Daten & Sicherheit
 - Daten nur lokal auf dem Gerät. Externe Dienste nur nach Konzept und Zustimmung (KI/Garmin erst Phase 6/7).

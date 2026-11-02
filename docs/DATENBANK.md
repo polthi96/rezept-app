@@ -8,7 +8,9 @@ Die Daten liegen auf dem Gerät in IndexedDB (Datenbankname `rezept-app`), verwa
 |---|---|
 | `src/db/schema.ts` | Datentypen und **Versionsgeschichte** (`SCHEMA_VERSIONS`) |
 | `src/db/db.ts` | Datenbank-Klasse, die alle Versionen der Reihe nach anwendet |
+| `src/db/migrations.ts` | Umbau-Schritte zwischen Versionen – gemeinsam genutzt von Datenbank-Upgrade **und** Backup-Import |
 | `src/backup/backup.ts` | Backup-Format, Prüfung, Wiederherstellung, `BACKUP_MIGRATIONS` |
+| `src/backup/validate.ts` | Feldgenaue Prüfung jedes Datensatzes beim Backup-Import |
 
 ## Regeln
 
@@ -18,27 +20,18 @@ Die Daten liegen auf dem Gerät in IndexedDB (Datenbankname `rezept-app`), verwa
 4. Neue Tabellen werden in `BACKUP_TABLES` aufgenommen (ein Test schlägt sonst fehl).
 5. Jede Migration bekommt einen Test nach dem Muster in `src/db/db.test.ts` („Migrationsweg"): Daten in alter Version anlegen → mit neuer Version öffnen → Daten vollständig und korrekt umgebaut.
 6. Vor dem Veröffentlichen einer Version mit Migration: Backup auf dem iPhone erstellen.
-7. **Neues Feld im Datenmodell ⇒ Prüfung im Backup-Import + Test.** Die `validate…`-Funktionen in `src/backup/backup.ts` prüfen jedes Feld auf Typ und erlaubte Werte; ungeprüfte Felder dürfen nicht in die Datenbank gelangen.
-8. Sobald Datenbankversion 2 existiert: Test, dass `BACKUP_MIGRATIONS` für jede Version von 1 bis zur vorletzten einen Schritt hat.
+7. **Neues Feld im Datenmodell ⇒ Prüfung im Backup-Import + Test.** Die `validate…`-Funktionen in `src/backup/validate.ts` prüfen jedes Feld auf Typ und erlaubte Werte; ungeprüfte Felder dürfen nicht in die Datenbank gelangen.
+8. Ein Test prüft, dass `BACKUP_MIGRATIONS` für jede ältere Version einen Schritt hat.
+9. Umbau-Logik gehört nach `src/db/migrations.ts` und wird in `schema.ts` (upgrade) und `backup.ts` (BACKUP_MIGRATIONS) **dieselbe** Funktion aufgerufen.
 
-## Beispiel: neue Version hinzufügen
+## Versionsgeschichte
 
-```ts
-// src/db/schema.ts
-export const SCHEMA_VERSIONS: SchemaVersion[] = [
-  { version: 1, stores: { recipes: 'id, updatedAt', images: 'id, recipeId', settings: 'key' } },
-  {
-    version: 2,
-    stores: { recipes: 'id, updatedAt, favorite' }, // nur Geändertes angeben
-    upgrade: (tx) => tx.table('recipes').toCollection().modify((r) => { r.favorite = 0 }).then(() => undefined),
-  },
-]
+| Version | App | Änderung |
+|---|---|---|
+| 1 | 0.1.x (Phase 0) | Tabellen `recipes` (nur Titel/Daten), `images`, `settings` |
+| 2 | 0.2.0 (Phase 1) | Rezepte mit Link, Portionen, Zeiten, Schlagwörtern, Favorit, Zutaten, Schritten; Bilder mit Reihenfolge (`position`); Indizes für Papierkorb, Favorit, Schlagwörter und Bildreihenfolge. Umbau: `recipeV1toV2`, `imageV1toV2` |
 
-// src/backup/backup.ts
-const BACKUP_MIGRATIONS = {
-  1: (data) => ({ ...data, recipes: data.recipes.map((r) => ({ ...r, favorite: 0 })) }),
-}
-```
+Vorlage für eine neue Version: siehe Version 2 in `src/db/schema.ts` und der Test „Migration 1 → 2" in `src/db/db.test.ts`.
 
 ## Was beim Update auf dem iPhone passiert
 
